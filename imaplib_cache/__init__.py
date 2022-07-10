@@ -2,6 +2,7 @@ import imaplib
 import os
 import logging
 from typing import Union, Optional, Literal, Callable
+from datetime import datetime
 
 from sqlmodel import Field, SQLModel, UniqueConstraint, create_engine, Session, select
 
@@ -20,6 +21,7 @@ class Fetch(SQLModel, table=True):  # type: ignore
     hash: str = Field(index=True, max_length=128)
     user: str = Field(max_length=128)
     data: bytes = Field(max_length=1024**2 * 10)  # 10MB maximum
+    datetime: datetime
 
 
 SQLALCHEMY_DATABASE_URL = os.environ.get("SQLALCHEMY_DATABASE_URI", "sqlite:///imaplib_cache.sqlite")
@@ -35,7 +37,7 @@ def parse_uid(response: bytes) -> tuple[str, str]:
 def cache_entry(user: str, uids: dict[str, str], message_id: str, message_parts: str, data: bytes) -> Fetch:
     uid = uids[message_id]
     hash_ = f"{uid} {message_parts}"
-    return Fetch(hash=hash_, user=user, data=data)
+    return Fetch(hash=hash_, user=user, data=data, datetime=datetime.now())
 
 
 def imap_login(self: imaplib.IMAP4, user: str, password: str) -> tuple[Literal["OK"], list[bytes]]:
@@ -114,3 +116,4 @@ def remove_cache():
 # TODO: Implement IMAP_CACHED class instead of monkey patching the methods
 # TODO: Patch the uid('fetch', ...) method
 # TODO: Move the database to something along the lines of RFC822
+# TODO: Only cache parts of message that aren't mutable. E.G. dont' cache flags
