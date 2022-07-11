@@ -4,6 +4,7 @@ import logging
 from typing import Union, Optional, Literal, Callable
 from datetime import datetime
 
+import sqlalchemy
 from sqlmodel import Field, SQLModel, UniqueConstraint, create_engine, Session, select
 
 logger = logging.getLogger()
@@ -16,9 +17,9 @@ old_fetch: Union[None, Callable] = None
 
 
 class Fetch(SQLModel, table=True):  # type: ignore
-    __table_args__ = (UniqueConstraint("hash"),)
+    __table_args__ = (UniqueConstraint("query", "user", name="user_query"),)
     id_: Optional[int] = Field(default=None, primary_key=True)
-    hash: str = Field(index=True, max_length=128)
+    query: str = Field(index=True, max_length=128)
     user: str = Field(max_length=128)
     data: bytes = Field(max_length=1024**2 * 10)  # 10MB maximum
     datetime: datetime
@@ -26,7 +27,12 @@ class Fetch(SQLModel, table=True):  # type: ignore
 
 SQLALCHEMY_DATABASE_URL = os.environ.get("SQLALCHEMY_DATABASE_URI", "sqlite:///imaplib_cache.sqlite")
 db_engine = create_engine(SQLALCHEMY_DATABASE_URL)
-SQLModel.metadata.create_all(db_engine)
+try:
+    SQLModel.metadata.tables["fetch"].create(db_engine)
+except sqlalchemy.exc.OperationalError as e:
+    if e.args[0].find("table fetch already exists") < 0:
+        raise e
+
 
 
 def parse_uid(response: bytes) -> tuple[str, str]:
@@ -36,8 +42,8 @@ def parse_uid(response: bytes) -> tuple[str, str]:
 
 def cache_entry(user: str, uids: dict[str, str], message_id: str, message_parts: str, data: bytes) -> Fetch:
     uid = uids[message_id]
-    hash_ = f"{uid} {message_parts}"
-    return Fetch(hash=hash_, user=user, data=data, datetime=datetime.now())
+    query = f"{uid} {message_parts}"
+    return Fetch(query=query, user=user, data=data, datetime=datetime.now())
 
 
 def imap_login(self: imaplib.IMAP4, user: str, password: str) -> tuple[Literal["OK"], list[bytes]]:
@@ -49,7 +55,7 @@ def imap_login(self: imaplib.IMAP4, user: str, password: str) -> tuple[Literal["
 
 def imap_fetch(
     self: imaplib.IMAP4, message_set: Union[Union[str, bytes]], message_parts: str
-) -> tuple[bytes, FetchResponse]:
+) -> tuple[str, FetchResponse]:
     """Function for monkey patching the imaplib fetch function
 
     response = [OK, BAD, NO]
@@ -66,11 +72,12 @@ def imap_fetch(
     message_ids = message_set.split(",")
     new_message_set = []
     cached_data = []
+    response = "OK"
     with Session(db_engine) as session:
         for message_id in message_ids:
             uid = uids[message_id]
-            hash_ = f"{uid} {message_parts}"
-            cache_hit = session.exec(select(Fetch).where(Fetch.hash == hash_ and Fetch.user == self.user)).one_or_none()
+            query = f"{uid} {message_parts}"
+            cache_hit = session.exec(select(Fetch).where(Fetch.query == query, Fetch.user == self.user)).one_or_none()
             if cache_hit:
                 logger.info(f"cache hit for {message_id}")
                 cached_data.append((f"{message_id} ({message_parts}".encode(), cache_hit.data))

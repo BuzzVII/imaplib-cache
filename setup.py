@@ -7,5 +7,5 @@ setup(
     author="Kristian Weegink",
     author_email="k.weegink@gmail.com",
     url="",
-    packages=["imaplib-cache"],
+    packages=["imaplib_cache"],
 )
